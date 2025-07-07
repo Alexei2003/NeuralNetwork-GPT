@@ -22,9 +22,9 @@ class Config:
         dir = "/content/"
     
     # Пути
-    data_path = dir + "NeuralNetwork/DataSet/DataSet.txt"    # Текстовый файл с фразами
-    model_path = dir + "NeuralNetwork/Model/text_model.pth"  # Путь для модели
-    vocab_path = dir + "NeuralNetwork/Model/vocab.json"      # Словарь
+    data_path = dir + "NEURAL_NETWORKS\NeuralNetwork-GPT/DataSet/DataSet.txt"    # Текстовый файл с фразами
+    model_path = dir + "NEURAL_NETWORKS\NeuralNetwork-GPT/Model/text_model.pth"  # Путь для модели
+    vocab_path = dir + "NEURAL_NETWORKS\NeuralNetwork-GPT/Model/vocab.json"      # Словарь
     
     # Параметры модели
     d_model = 512              # Размерность эмбеддингов
