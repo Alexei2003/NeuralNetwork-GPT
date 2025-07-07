@@ -22,7 +22,7 @@ class Config:
         dir = "/content/"
     
     # Пути
-    data_path = dir + "NeuralNetwork-GPT/DataSet/DataSet.txt"    # Текстовый файл с фразами
+    data_path = dir + "NeuralNetwork-GPT/DataSet.txt"    # Текстовый файл с фразами
     model_path = dir + "NeuralNetwork-GPT/Model/text_model.pth"  # Путь для модели
     vocab_path = dir + "NeuralNetwork-GPT/Model/vocab.json"      # Словарь
     
@@ -92,16 +92,14 @@ def build_vocab(texts, min_freq=3):
     return vocab
 
 def load_data():
-    if os.path.exists(config.data_path):
-        with open(config.data_path, 'r', encoding='utf-8') as f:
-            texts = [line.strip() for line in f if line.strip()]
-    else:
-        # Пример данных
-        texts = [
-            "Привет как дела",
-            "Что нового в мире",
-            "Расскажи анекдот"
-        ]
+    if not os.path.exists(config.data_path):
+        raise FileNotFoundError(f"❌ Файл с данными не найден: {config.data_path}")
+    
+    with open(config.data_path, 'r', encoding='utf-8') as f:
+        texts = [line.strip() for line in f if line.strip()]
+    
+    if len(texts) == 0:
+        raise ValueError(f"❌ Файл с данными пуст: {config.data_path}")
     
     return texts
 
@@ -163,7 +161,7 @@ def train_epoch(model, loader, optimizer, device, scheduler=None, scaler=None):
         inputs = inputs[:, :-1]
         mask = mask[:, :-1]
         
-        with torch.cuda.amp.autocast(enabled=scaler is not None):
+        with torch.amp.autocast(device_type='cuda', enabled=scaler is not None):
             outputs = model(inputs, src_key_padding_mask=(1 - mask).bool())
             
             # Переформатирование вывода для вычисления потерь
@@ -200,61 +198,69 @@ def run_training():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs(os.path.dirname(config.model_path), exist_ok=True)
     
-    # Загрузка данных
-    texts = load_data()
-    print(f"Загружено {len(texts)} фраз")
-    
-    # Построение словаря
-    vocab = build_vocab(texts)
-    print(f"Создан словарь из {len(vocab)} токенов")
-    
-    # Сохранение словаря
-    with open(config.vocab_path, 'w', encoding='utf-8') as f:
-        json.dump(vocab, f, ensure_ascii=False)
-    
-    dataset = TextDataset(texts, vocab, config.max_seq_len)
-    loader = DataLoader(
-        dataset, 
-        batch_size=config.batch_size,
-        shuffle=True,
-        num_workers=min(4, os.cpu_count())
-    )
-    
-    model = TextTransformer(
-        vocab_size=len(vocab),
-        d_model=config.d_model,
-        nhead=config.nhead,
-        num_layers=config.num_layers,
-        dim_feedforward=config.dim_feedforward,
-        dropout=config.dropout
-    ).to(device)
-    
-    optimizer = optim.AdamW(model.parameters(), lr=config.lr, weight_decay=1e-5)
-    scheduler = optim.lr_scheduler.OneCycleLR(
-        optimizer, 
-        max_lr=config.lr,
-        steps_per_epoch=len(loader),
-        epochs=config.epochs
-    )
-    scaler = torch.cuda.amp.GradScaler(enabled=True)
-    
-    # Обучение
-    for epoch in range(config.epochs):
-        start_time = time.time()
-        train_loss = train_epoch(model, loader, optimizer, device, scheduler, scaler)
-        epoch_time = time.time() - start_time
+    try:
+        # Загрузка данных
+        texts = load_data()
+        print(f"Загружено {len(texts)} фраз")
         
-        print(f"Эпоха {epoch+1}/{config.epochs} | "
-              f"Потери: {train_loss:.4f} | "
-              f"Время: {epoch_time:.2f}с")
-    
-    # Сохранение модели
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'vocab_size': len(vocab),
-        'config': vars(config)
-    }, config.model_path)
-    print(f"Модель сохранена: {config.model_path}")
+        # Построение словаря
+        vocab = build_vocab(texts)
+        print(f"Создан словарь из {len(vocab)} токенов")
+        
+        # Сохранение словаря
+        with open(config.vocab_path, 'w', encoding='utf-8') as f:
+            json.dump(vocab, f, ensure_ascii=False)
+        
+        dataset = TextDataset(texts, vocab, config.max_seq_len)
+        loader = DataLoader(
+            dataset, 
+            batch_size=config.batch_size,
+            shuffle=True,
+            num_workers=min(4, os.cpu_count())
+        )
+        
+        model = TextTransformer(
+            vocab_size=len(vocab),
+            d_model=config.d_model,
+            nhead=config.nhead,
+            num_layers=config.num_layers,
+            dim_feedforward=config.dim_feedforward,
+            dropout=config.dropout
+        ).to(device)
+        
+        optimizer = optim.AdamW(model.parameters(), lr=config.lr, weight_decay=1e-5)
+        scheduler = optim.lr_scheduler.OneCycleLR(
+            optimizer, 
+            max_lr=config.lr,
+            steps_per_epoch=len(loader),
+            epochs=config.epochs
+        )
+        scaler = torch.amp.GradScaler('cuda', enabled=True)
+        
+        # Обучение
+        for epoch in range(config.epochs):
+            start_time = time.time()
+            train_loss = train_epoch(model, loader, optimizer, device, scheduler, scaler)
+            epoch_time = time.time() - start_time
+            
+            print(f"Эпоха {epoch+1}/{config.epochs} | "
+                  f"Потери: {train_loss:.4f} | "
+                  f"Время: {epoch_time:.2f}с")
+        
+        # Сохранение модели
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'vocab_size': len(vocab),
+            'd_model': config.d_model,  # Явно сохраняем параметры
+            'nhead': config.nhead,
+            'num_layers': config.num_layers,
+            'dim_feedforward': config.dim_feedforward,
+            'dropout': config.dropout
+        }, config.model_path)
+        print(f"Модель сохранена: {config.model_path}")
+        
+    except Exception as e:
+        print(f"❌ Ошибка при обучении: {str(e)}")
 
 # ====================== ГЕНЕРАЦИЯ ======================
 def generate_text(model, vocab, prompt, device, max_length=50, temperature=0.7, top_k=50):
@@ -300,54 +306,58 @@ def generate_text(model, vocab, prompt, device, max_length=50, temperature=0.7, 
 def interactive_mode():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Загрузка словаря
-    if not os.path.exists(config.vocab_path):
-        print("❌ Словарь не найден!")
-        return
-    
-    with open(config.vocab_path, 'r', encoding='utf-8') as f:
-        vocab = json.load(f)
-    
-    # Загрузка модели
-    if not os.path.exists(config.model_path):
-        print("❌ Модель не найдена!")
-        return
-    
-    checkpoint = torch.load(config.model_path, map_location=device)
-    model = TextTransformer(
-        vocab_size=checkpoint['vocab_size'],
-        d_model=checkpoint['config']['d_model'],
-        nhead=checkpoint['config']['nhead'],
-        num_layers=checkpoint['config']['num_layers'],
-        dim_feedforward=checkpoint['config']['dim_feedforward'],
-        dropout=checkpoint['config']['dropout']
-    ).to(device)
-    
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
-    
-    print("Модель загружена. Введите текст для генерации (или 'exit' для выхода)")
-    
-    while True:
-        try:
-            prompt = input("\nВаше сообщение: ").strip()
-        except KeyboardInterrupt:
-            print("\nВыход...")
-            break
-            
-        if prompt.lower() == 'exit':
-            break
-            
-        if not prompt:
-            print("⚠️ Введите текст!")
-            continue
-            
-        start_time = time.time()
-        generated = generate_text(model, vocab, prompt, device)
-        gen_time = time.time() - start_time
+    try:
+        # Загрузка словаря
+        if not os.path.exists(config.vocab_path):
+            print("❌ Словарь не найден!")
+            return
         
-        print(f"\nБогдан: {generated}")
-        print(f"Время генерации: {gen_time:.2f}с")
+        with open(config.vocab_path, 'r', encoding='utf-8') as f:
+            vocab = json.load(f)
+        
+        # Загрузка модели
+        if not os.path.exists(config.model_path):
+            print("❌ Модель не найдена!")
+            return
+        
+        checkpoint = torch.load(config.model_path, map_location=device)
+        model = TextTransformer(
+            vocab_size=checkpoint['vocab_size'],
+            d_model=checkpoint['d_model'],  # Прямой доступ к параметрам
+            nhead=checkpoint['nhead'],
+            num_layers=checkpoint['num_layers'],
+            dim_feedforward=checkpoint['dim_feedforward'],
+            dropout=checkpoint['dropout']
+        ).to(device)
+        
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model.eval()
+        
+        print("Модель загружена. Введите текст для генерации (или 'exit' для выхода)")
+        
+        while True:
+            try:
+                prompt = input("\nВаше сообщение: ").strip()
+            except KeyboardInterrupt:
+                print("\nВыход...")
+                break
+                
+            if prompt.lower() == 'exit':
+                break
+                
+            if not prompt:
+                print("⚠️ Введите текст!")
+                continue
+                
+            start_time = time.time()
+            generated = generate_text(model, vocab, prompt, device)
+            gen_time = time.time() - start_time
+            
+            print(f"\nБогдан: {generated}")
+            print(f"Время генерации: {gen_time:.2f}с")
+            
+    except Exception as e:
+        print(f"❌ Ошибка в интерактивном режиме: {str(e)}")
 
 def main_menu():
     while True:
