@@ -15,7 +15,7 @@ import gc
 # ====================== КОНФИГУРАЦИЯ ======================
 class Config:
     # Системные параметры
-    system = "colab"
+    system = "my"
     
     if system == "my":
         dir = "/media/alex/Programs/NEURAL_NETWORKS/"
