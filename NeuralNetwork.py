@@ -37,12 +37,13 @@ class Config:
     
     # Параметры обучения
     batch_size = 32
-    lr = 0.01
+    lr = 0.001
     epochs = 100
     accumulation_steps = 4
     early_stop_patience = 3
     min_loss_delta = 0.001
     mixed_precision = True
+    factor_lr = 0.5                 # Коэффициент уменьшения learning rate при plateau
     patience_lr = 0                 # Количество эпох без улучшения для снижения learning rate
 
 config = Config()
@@ -312,7 +313,7 @@ def run_training(resume_checkpoint=None):
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, 
             mode='min', 
-            factor=0.5, 
+            factor=config.factor_lr, 
             patience=config.patience_lr, 
             verbose=True
         )
