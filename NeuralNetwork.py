@@ -23,26 +23,26 @@ class Config:
         dir = "/content/"
     
     # Пути
-    data_path = dir + "NeuralNetwork-GPT/DataSet.txt"    # Текстовый файл с фразами
-    model_path = dir + "NeuralNetwork-GPT/Model/text_model.pth"  # Путь для модели
-    vocab_path = dir + "NeuralNetwork-GPT/Model/vocab.json"      # Словарь
+    data_path = dir + "NeuralNetwork-GPT/DataSet.txt"
+    model_path = dir + "NeuralNetwork-GPT/Model/text_model.pth"
+    vocab_path = dir + "NeuralNetwork-GPT/Model/vocab.json"
     
     # Параметры модели
-    d_model = 512              # Размерность эмбеддингов
-    nhead = 8                  # Количество голов внимания
-    num_layers = 6             # Количество слоев трансформера
-    dim_feedforward = 2048     # Размер скрытого слоя FFN
-    max_seq_len = 256          # Максимальная длина последовательности
-    dropout = 0.5              # Dropout
+    d_model = 512
+    nhead = 8
+    num_layers = 6
+    dim_feedforward = 2048
+    max_seq_len = 256
+    dropout = 0.5
     
     # Параметры обучения
-    batch_size = 32            # Размер батча
-    lr = 0.0001                # Скорость обучения
-    epochs = 20                # Количество эпох
-    accumulation_steps = 4     # Шаги накопления градиентов
-    early_stop_patience = 3    # Терпение для ранней остановки
-    min_loss_delta = 0.001     # Минимальное изменение loss
-    mixed_precision = True     # Использовать mixed precision
+    batch_size = 32
+    lr = 0.001
+    epochs = 100
+    accumulation_steps = 4
+    early_stop_patience = 3
+    min_loss_delta = 0.001
+    mixed_precision = True
 
 config = Config()
 
@@ -52,6 +52,8 @@ class TextDataset(Dataset):
         self.texts = texts
         self.vocab = vocab
         self.seq_len = seq_len
+        self.unk_token = vocab["<unk>"]
+        self.pad_token = vocab["<pad>"]
         
     def __len__(self):
         return len(self.texts)
@@ -59,16 +61,18 @@ class TextDataset(Dataset):
     def __getitem__(self, idx):
         text = self.texts[idx]
         tokens = text.split()[:self.seq_len]
+        n_tokens = len(tokens)
         
         # Конвертация в индексы
-        input_ids = [self.vocab.get(token, self.vocab["<unk>"]) for token in tokens]
+        input_ids = [self.vocab.get(token, self.unk_token) for token in tokens]
         
         # Добавление паддинга
-        if len(input_ids) < self.seq_len:
-            input_ids += [self.vocab["<pad>"]] * (self.seq_len - len(input_ids))
-        
-        # Создание маски внимания
-        attention_mask = [1] * len(tokens) + [0] * (self.seq_len - len(tokens))
+        if n_tokens < self.seq_len:
+            pad_len = self.seq_len - n_tokens
+            input_ids += [self.pad_token] * pad_len
+            attention_mask = [1] * n_tokens + [0] * pad_len
+        else:
+            attention_mask = [1] * self.seq_len
         
         return {
             "input_ids": torch.tensor(input_ids, dtype=torch.long),
@@ -118,49 +122,42 @@ class PositionalEncoding(nn.Module):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
         
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(max_len, 1, d_model)
-        pe[:, 0, 0::2] = torch.sin(position * div_term)
-        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
         self.register_buffer('pe', pe)
     
     def forward(self, x):
-        x = x.transpose(0, 1)
-        x = x + self.pe[:x.size(0)]
-        return self.dropout(x).transpose(0, 1)
+        x = x + self.pe[:x.size(1), :].squeeze(1)
+        return self.dropout(x)
 
 class TextTransformer(nn.Module):
     def __init__(self, vocab_size, d_model, nhead, num_layers, dim_feedforward, dropout):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, d_model)
-        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        self.pos_encoder = PositionalEncoding(d_model, dropout, config.max_seq_len)
         
         encoder_layer = nn.TransformerEncoderLayer(
             d_model, nhead, dim_feedforward, dropout, 
-            batch_first=True,
-            device=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+            batch_first=True
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
         
         self.fc_out = nn.Linear(d_model, vocab_size)
     
-    def forward(self, src, src_mask=None, src_key_padding_mask=None):
+    def forward(self, src, src_key_padding_mask=None):
         src = self.embedding(src)
         src = self.pos_encoder(src)
-        
-        output = self.transformer(
-            src, 
-            mask=src_mask,
-            src_key_padding_mask=src_key_padding_mask
-        )
-        
+        output = self.transformer(src, src_key_padding_mask=src_key_padding_mask)
         return self.fc_out(output)
 
 # ====================== ОБУЧЕНИЕ ======================
 def train_epoch(model, loader, optimizer, device, scheduler=None, scaler=None):
     model.train()
-    total_loss = 0
+    total_loss = 0.0
     optimizer.zero_grad()
     
     for i, batch in enumerate(tqdm(loader)):
@@ -173,23 +170,20 @@ def train_epoch(model, loader, optimizer, device, scheduler=None, scaler=None):
         mask = mask[:, :-1]
         
         autocast_context = torch.amp.autocast(
-            device_type='cuda', 
+            device_type='cuda' if device.type == 'cuda' else 'cpu',
             dtype=torch.float16, 
             enabled=scaler is not None and config.mixed_precision
         )
         
         with autocast_context:
             outputs = model(inputs, src_key_padding_mask=~mask)
-            
-            # Переформатирование вывода для вычисления потерь
             outputs = outputs.view(-1, outputs.size(-1))
             targets = targets.view(-1)
             
-            # Игнорируем паддинг в таргетах
             loss = F.cross_entropy(
                 outputs,
                 targets,
-                ignore_index=0  # Игнорируем паддинг
+                ignore_index=0
             ) / config.accumulation_steps
         
         if scaler:
@@ -198,7 +192,6 @@ def train_epoch(model, loader, optimizer, device, scheduler=None, scaler=None):
             loss.backward()
         
         if (i + 1) % config.accumulation_steps == 0 or (i + 1) == len(loader):
-            # Gradient clipping
             if scaler:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -209,44 +202,42 @@ def train_epoch(model, loader, optimizer, device, scheduler=None, scaler=None):
                 optimizer.step()
                 
             optimizer.zero_grad(set_to_none=True)
-            if scheduler:
-                scheduler.step(total_loss)
         
         total_loss += loss.item() * config.accumulation_steps
     
     return total_loss / len(loader)
 
+@torch.inference_mode()
 def evaluate(model, loader, device, scaler=None):
     model.eval()
-    total_loss = 0
+    total_loss = 0.0
     
-    with torch.no_grad():
-        for batch in tqdm(loader):
-            inputs = batch["input_ids"].to(device, non_blocking=True)
-            mask = batch["attention_mask"].to(device, non_blocking=True)
+    for batch in tqdm(loader):
+        inputs = batch["input_ids"].to(device, non_blocking=True)
+        mask = batch["attention_mask"].to(device, non_blocking=True)
+        
+        targets = inputs[:, 1:].contiguous()
+        inputs = inputs[:, :-1]
+        mask = mask[:, :-1]
+        
+        autocast_context = torch.amp.autocast(
+            device_type='cuda' if device.type == 'cuda' else 'cpu',
+            dtype=torch.float16, 
+            enabled=scaler is not None and config.mixed_precision
+        )
+        
+        with autocast_context:
+            outputs = model(inputs, src_key_padding_mask=~mask)
+            outputs = outputs.view(-1, outputs.size(-1))
+            targets = targets.view(-1)
             
-            targets = inputs[:, 1:].contiguous()
-            inputs = inputs[:, :-1]
-            mask = mask[:, :-1]
-            
-            autocast_context = torch.amp.autocast(
-                device_type='cuda', 
-                dtype=torch.float16, 
-                enabled=scaler is not None and config.mixed_precision
+            loss = F.cross_entropy(
+                outputs,
+                targets,
+                ignore_index=0
             )
-            
-            with autocast_context:
-                outputs = model(inputs, src_key_padding_mask=~mask)
-                outputs = outputs.view(-1, outputs.size(-1))
-                targets = targets.view(-1)
-                
-                loss = F.cross_entropy(
-                    outputs,
-                    targets,
-                    ignore_index=0
-                )
-            
-            total_loss += loss.item()
+        
+        total_loss += loss.item()
     
     return total_loss / len(loader)
 
@@ -275,7 +266,8 @@ def run_training(resume_checkpoint=None):
         print(f"Загружено {len(train_texts)} обучающих фраз, {len(val_texts)} валидационных")
         
         # Построение словаря
-        vocab = build_vocab(train_texts + val_texts)
+        all_texts = train_texts + val_texts  # Оптимизировано
+        vocab = build_vocab(all_texts)
         print(f"Создан словарь из {len(vocab)} токенов")
         
         # Сохранение словаря
@@ -291,7 +283,8 @@ def run_training(resume_checkpoint=None):
             batch_size=config.batch_size,
             shuffle=True,
             num_workers=min(4, os.cpu_count()),
-            pin_memory=True
+            pin_memory=True,
+            persistent_workers=True  # Оптимизация
         )
         
         val_loader = DataLoader(
@@ -299,7 +292,8 @@ def run_training(resume_checkpoint=None):
             batch_size=config.batch_size,
             shuffle=False,
             num_workers=min(2, os.cpu_count()),
-            pin_memory=True
+            pin_memory=True,
+            persistent_workers=True  # Оптимизация
         )
         
         # Инициализация модели
@@ -324,14 +318,15 @@ def run_training(resume_checkpoint=None):
         
         scaler = None
         if config.mixed_precision and device.type == 'cuda':
-            scaler = torch.amp.GradScaler()
+            scaler = torch.cuda.amp.GradScaler()
         
-        # Загрузка чекпоинта при необходимости
+        # Инициализация переменных обучения
         start_epoch = 0
         best_val_loss = float('inf')
         patience_counter = 0
         
-        if resume_checkpoint:
+        # Загрузка чекпоинта
+        if resume_checkpoint and os.path.exists(resume_checkpoint):
             checkpoint = torch.load(resume_checkpoint, map_location=device)
             model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -343,7 +338,7 @@ def run_training(resume_checkpoint=None):
         
         # Обучение
         for epoch in range(start_epoch, config.epochs):
-            start_time = time.time()
+            epoch_start = time.time()
             
             # Очистка памяти
             if device.type == 'cuda':
@@ -355,45 +350,32 @@ def run_training(resume_checkpoint=None):
             
             # Валидация
             val_loss = evaluate(model, val_loader, device, scaler)
-            
-            # Обновление LR
             scheduler.step(val_loss)
             
-            epoch_time = time.time() - start_time
+            epoch_time = time.time() - epoch_start
+            lr = optimizer.param_groups[0]['lr']
             
             print(f"Эпоха {epoch+1}/{config.epochs} | "
                   f"Train loss: {train_loss:.4f} | Val loss: {val_loss:.4f} | "
-                  f"Время: {epoch_time:.2f}с | LR: {optimizer.param_groups[0]['lr']:.6f}")
+                  f"Время: {epoch_time:.2f}с | LR: {lr:.6f}")
             
-            # Сохранение лучшей модели
+            # Проверка улучшения и сохранение лучшей модели
             if val_loss < best_val_loss - config.min_loss_delta:
                 best_val_loss = val_loss
                 patience_counter = 0
-                torch.save({
-                    'model_state_dict': model.state_dict(),
-                    'vocab_size': len(vocab),
-                    'd_model': config.d_model,
-                    'nhead': config.nhead,
-                    'num_layers': config.num_layers,
-                    'dim_feedforward': config.dim_feedforward,
-                    'dropout': config.dropout
-                }, config.model_path)
+                torch.save(model.state_dict(), config.model_path)
                 print(f"🔥 Лучшая модель сохранена: {config.model_path}")
-                      
-            # Ранняя остановка
+            
+            # Сохранение чекпоинта каждый эпох
+            save_checkpoint(model, optimizer, epoch, train_loss, val_loss, config.model_path)
+            print(f"💾 Чекпоинт сохранен: {config.model_path}")
+            
+            # Проверка ранней остановки
             if val_loss >= best_val_loss - config.min_loss_delta:
                 patience_counter += 1
                 if patience_counter >= config.early_stop_patience:
                     print(f"🏁 Ранняя остановка на эпохе {epoch+1}")
                     break
-            else:
-                save_checkpoint(
-                    model, optimizer, epoch+1, 
-                    train_loss, val_loss, 
-                    config.model_path
-                )
-                print(f"💾 Чекпоинт сохранен: {config.model_path}")
-                patience_counter = 0
         
         print(f"Обучение завершено! Лучшая Val loss: {best_val_loss:.4f}")
         
@@ -403,6 +385,7 @@ def run_training(resume_checkpoint=None):
         traceback.print_exc()
 
 # ====================== ГЕНЕРАЦИЯ ======================
+@torch.inference_mode()
 def generate_text(model, vocab, prompt, device, max_length=50, temperature=0.7, top_k=50, stop_tokens=None):
     model.eval()
     rev_vocab = {idx: word for word, idx in vocab.items()}
@@ -412,34 +395,26 @@ def generate_text(model, vocab, prompt, device, max_length=50, temperature=0.7, 
     input_ids = [vocab.get(token, vocab["<unk>"]) for token in tokens]
     
     # Определение стоп-токенов
-    if stop_tokens is None:
-        stop_tokens = {"<eos>"}
+    stop_tokens = stop_tokens or {"<eos>"}
     stop_ids = {vocab[token] for token in stop_tokens if token in vocab}
     
     # Генерация
-    with torch.no_grad(), torch.amp.autocast(device_type=device.type, enabled=True):
-        for _ in range(max_length):
-            inputs = torch.tensor([input_ids], dtype=torch.long).to(device)
-            mask = torch.ones_like(inputs, dtype=torch.bool)
-            
+    for _ in range(max_length):
+        inputs = torch.tensor([input_ids], dtype=torch.long).to(device)
+        mask = torch.ones_like(inputs, dtype=torch.bool)
+        
+        with torch.amp.autocast(device_type=device.type, enabled=True):
             outputs = model(inputs, src_key_padding_mask=~mask)
-            
-            # Получение последнего токена
             logits = outputs[0, -1, :] / temperature
             
             # Фильтрация top-k
             if top_k > 0:
-                top_values = torch.topk(logits, top_k)
-                indices_to_remove = logits < top_values.values[..., -1, None]
-                logits[indices_to_remove] = -float('Inf')
+                top_vals, top_idxs = torch.topk(logits, top_k)
+                logits[logits < top_vals[-1]] = -float('Inf')
             
-            # Применение softmax
             probs = F.softmax(logits, dim=-1)
-            
-            # Выборка
             next_token = torch.multinomial(probs, 1).item()
             
-            # Проверка на стоп-токены
             if next_token in stop_ids:
                 break
                 
@@ -466,14 +441,17 @@ def interactive_mode():
             print("❌ Модель не найдена!")
             return
         
-        checkpoint = torch.load(config.model_path, map_location=device)
+        # Загрузка конфигурации модели из чекпоинта (если доступно)
+        model_path = config.model_path if os.path.exists(config.model_path) else config.model_path
+        checkpoint = torch.load(model_path, map_location=device)
+        
         model = TextTransformer(
-            vocab_size=checkpoint['vocab_size'],
-            d_model=checkpoint['d_model'],
-            nhead=checkpoint['nhead'],
-            num_layers=checkpoint['num_layers'],
-            dim_feedforward=checkpoint['dim_feedforward'],
-            dropout=checkpoint['dropout']
+            vocab_size=checkpoint.get('vocab_size', len(vocab)),
+            d_model=checkpoint.get('d_model', config.d_model),
+            nhead=checkpoint.get('nhead', config.nhead),
+            num_layers=checkpoint.get('num_layers', config.num_layers),
+            dim_feedforward=checkpoint.get('dim_feedforward', config.dim_feedforward),
+            dropout=checkpoint.get('dropout', config.dropout)
         ).to(device)
         
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -485,23 +463,22 @@ def interactive_mode():
         while True:
             try:
                 prompt = input("\nВаше сообщение: ").strip()
+                if not prompt:
+                    print("⚠️ Введите текст!")
+                    continue
+                if prompt.lower() == 'exit':
+                    break
+                
+                start_time = time.time()
+                generated = generate_text(model, vocab, prompt, device)
+                gen_time = time.time() - start_time
+                
+                print(f"\nСеть: {generated}")
+                print(f"Время генерации: {gen_time:.2f}с")
+                
             except KeyboardInterrupt:
                 print("\nВыход...")
                 break
-                
-            if prompt.lower() == 'exit':
-                break
-                
-            if not prompt:
-                print("⚠️ Введите текст!")
-                continue
-                
-            start_time = time.time()
-            generated = generate_text(model, vocab, prompt, device)
-            gen_time = time.time() - start_time
-            
-            print(f"\nСеть: {generated}")
-            print(f"Время генерации: {gen_time:.2f}с")
             
     except Exception as e:
         print(f"❌ Ошибка в интерактивном режиме: {str(e)}")
