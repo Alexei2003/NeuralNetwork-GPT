@@ -395,8 +395,9 @@ def generate_text(model, vocab, prompt, device, max_length=50, temperature=0.7, 
     tokens = prompt.split()
     input_ids = [vocab.get(token, vocab["<unk>"]) for token in tokens]
     
-    # Определение стоп-токенов
+    # Определение стоп-токенов (включая <unk>)
     stop_tokens = stop_tokens or {"<eos>"}
+    stop_tokens = stop_tokens | {"<unk>"}  # Объединение множеств
     stop_ids = {vocab[token] for token in stop_tokens if token in vocab}
     
     # Генерация
@@ -416,6 +417,7 @@ def generate_text(model, vocab, prompt, device, max_length=50, temperature=0.7, 
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, 1).item()
             
+            # Прерывание при появлении стоп-токена (включая <unk>)
             if next_token in stop_ids:
                 break
                 
