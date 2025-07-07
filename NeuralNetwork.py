@@ -15,7 +15,7 @@ import gc
 # ====================== КОНФИГУРАЦИЯ ======================
 class Config:
     # Системные параметры
-    system = "my"
+    system = "colab"
     
     if system == "my":
         dir = "/media/alex/Programs/NEURAL_NETWORKS/"
@@ -26,7 +26,6 @@ class Config:
     data_path = dir + "NeuralNetwork-GPT/DataSet.txt"    # Текстовый файл с фразами
     model_path = dir + "NeuralNetwork-GPT/Model/text_model.pth"  # Путь для модели
     vocab_path = dir + "NeuralNetwork-GPT/Model/vocab.json"      # Словарь
-    checkpoint_dir = dir + "NeuralNetwork-GPT/Checkpoints/"      # Чекпоинты
     
     # Параметры модели
     d_model = 512              # Размерность эмбеддингов
@@ -269,7 +268,6 @@ def save_checkpoint(model, optimizer, epoch, train_loss, val_loss, path):
 def run_training(resume_checkpoint=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs(os.path.dirname(config.model_path), exist_ok=True)
-    os.makedirs(config.checkpoint_dir, exist_ok=True)
     
     try:
         # Загрузка данных
@@ -389,13 +387,12 @@ def run_training(resume_checkpoint=None):
                     print(f"🏁 Ранняя остановка на эпохе {epoch+1}")
                     break
             else:
-                checkpoint_path = os.path.join(config.checkpoint_dir, f"epoch_{epoch+1}.pth")
                 save_checkpoint(
                     model, optimizer, epoch+1, 
                     train_loss, val_loss, 
-                    checkpoint_path
+                    config.model_path
                 )
-                print(f"💾 Чекпоинт сохранен: {checkpoint_path}")
+                print(f"💾 Чекпоинт сохранен: {config.model_path}")
                 patience_counter = 0
         
         print(f"Обучение завершено! Лучшая Val loss: {best_val_loss:.4f}")
@@ -416,7 +413,7 @@ def generate_text(model, vocab, prompt, device, max_length=50, temperature=0.7, 
     
     # Определение стоп-токенов
     if stop_tokens is None:
-        stop_tokens = {"<eos>", "<unk>"}
+        stop_tokens = {"<eos>"}
     stop_ids = {vocab[token] for token in stop_tokens if token in vocab}
     
     # Генерация
@@ -510,24 +507,7 @@ def interactive_mode():
         print(f"❌ Ошибка в интерактивном режиме: {str(e)}")
 
 def continue_training():
-    checkpoints = [f for f in os.listdir(config.checkpoint_dir) if f.endswith('.pth')]
-    if not checkpoints:
-        print("❌ Чекпоинты не найдены!")
-        return
-    
-    print("\nДоступные чекпоинты:")
-    for i, cp in enumerate(sorted(checkpoints, key=lambda x: int(x.split('_')[1].split('.')[0]))):
-        print(f"{i+1}. {cp}")
-    
-    try:
-        choice = int(input("\nВыберите чекпоинт для продолжения: ").strip())
-        if 1 <= choice <= len(checkpoints):
-            checkpoint_path = os.path.join(config.checkpoint_dir, checkpoints[choice-1])
-            run_training(resume_checkpoint=checkpoint_path)
-        else:
-            print("❌ Неверный выбор!")
-    except ValueError:
-        print("❌ Введите число!")
+    run_training(resume_checkpoint=config.model_path)
 
 def main_menu():
     while True:
