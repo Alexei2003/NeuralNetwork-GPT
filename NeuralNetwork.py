@@ -241,7 +241,7 @@ def evaluate(model, loader, device, scaler=None):
     
     return total_loss / len(loader)
 
-def save_checkpoint(model, optimizer, epoch, train_loss, val_loss, path):
+def save_checkpoint(model, optimizer, epoch, train_loss, val_loss, vocab, path):
     torch.save({
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
@@ -318,7 +318,7 @@ def run_training(resume_checkpoint=None):
         
         scaler = None
         if config.mixed_precision and device.type == 'cuda':
-            scaler = torch.amp.GradScaler(device_type='cuda')
+            scaler = torch.amp.GradScaler('cuda', enabled=config.mixed_precision and torch.cuda.is_available())
         
         # Инициализация переменных обучения
         start_epoch = 0
@@ -367,7 +367,7 @@ def run_training(resume_checkpoint=None):
                 print(f"🔥 Лучшая модель сохранена: {config.model_path}")
             
             # Сохранение чекпоинта каждый эпох
-            save_checkpoint(model, optimizer, epoch, train_loss, val_loss, config.model_path)
+            save_checkpoint(model, optimizer, epoch, train_loss, val_loss, vocab, config.model_path)
             print(f"💾 Чекпоинт сохранен: {config.model_path}")
             
             # Проверка ранней остановки
