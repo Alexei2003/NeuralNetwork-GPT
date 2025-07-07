@@ -247,17 +247,17 @@ def run_training():
                   f"Потери: {train_loss:.4f} | "
                   f"Время: {epoch_time:.2f}с")
         
-        # Сохранение модели
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'vocab_size': len(vocab),
-            'd_model': config.d_model,  # Явно сохраняем параметры
-            'nhead': config.nhead,
-            'num_layers': config.num_layers,
-            'dim_feedforward': config.dim_feedforward,
-            'dropout': config.dropout
-        }, config.model_path)
-        print(f"Модель сохранена: {config.model_path}")
+            # Сохранение модели
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'vocab_size': len(vocab),
+                'd_model': config.d_model,  # Явно сохраняем параметры
+                'nhead': config.nhead,
+                'num_layers': config.num_layers,
+                'dim_feedforward': config.dim_feedforward,
+                'dropout': config.dropout
+            }, config.model_path)
+            print(f"Модель сохранена: {config.model_path}")
         
     except Exception as e:
         print(f"❌ Ошибка при обучении: {str(e)}")
@@ -293,8 +293,8 @@ def generate_text(model, vocab, prompt, device, max_length=50, temperature=0.7, 
             # Выборка
             next_token = torch.multinomial(probs, 1).item()
             
-            # Проверка на конец предложения
-            if next_token == vocab["<eos>"]:
+            # Проверка на стоп-токены (<eos> и <unk>)
+            if next_token in [vocab["<eos>"], vocab["<unk>"]]:
                 break
                 
             input_ids.append(next_token)
@@ -353,7 +353,7 @@ def interactive_mode():
             generated = generate_text(model, vocab, prompt, device)
             gen_time = time.time() - start_time
             
-            print(f"\nБогдан: {generated}")
+            print(f"\nСеть: {generated}")
             print(f"Время генерации: {gen_time:.2f}с")
             
     except Exception as e:
