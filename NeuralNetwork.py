@@ -43,6 +43,7 @@ class Config:
     early_stop_patience = 3
     min_loss_delta = 0.001
     mixed_precision = True
+    patience_lr = 0                 # Количество эпох без улучшения для снижения learning rate
 
 config = Config()
 
@@ -312,7 +313,7 @@ def run_training(resume_checkpoint=None):
             optimizer, 
             mode='min', 
             factor=0.5, 
-            patience=2, 
+            patience=config.patience_lr, 
             verbose=True
         )
         
