@@ -318,7 +318,7 @@ def run_training(resume_checkpoint=None):
         
         scaler = None
         if config.mixed_precision and device.type == 'cuda':
-            scaler = torch.cuda.amp.GradScaler()
+            scaler = torch.amp.GradScaler(device_type='cuda')
         
         # Инициализация переменных обучения
         start_epoch = 0
