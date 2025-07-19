@@ -37,7 +37,7 @@ class Config:
 
     # Параметры обучения
     batch_size = 32
-    lr = 0.001
+    lr = 0.0001
     epochs = 100
     accumulation_steps = 4
     early_stop_patience = 3
